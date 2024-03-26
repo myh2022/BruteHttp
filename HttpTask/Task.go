@@ -5,11 +5,13 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"github.com/chromedp/chromedp"
 	"github.com/gocolly/colly"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -50,7 +52,7 @@ func formatPath(url string) string {
 
 func (options *Options) createBruteList(targetList []string) []string {
 	var urlList []string
-	file, err := os.Open("domain")
+	file, err := os.Open("HttpTask/domain")
 	if err != nil {
 		panic(err)
 		return nil
@@ -128,7 +130,7 @@ func getWebIcon(iconUrl string, httpData *HttpData) {
 
 }
 
-var wapp, _ = whatweb.Init("../whatweb/app.json", true)
+var wapp, _ = whatweb.Init("whatweb/app.json", true)
 
 func fingerDetect(body string, httpData *HttpData) {
 	httpData.Fingers = "test"
@@ -178,38 +180,20 @@ func (options *Options) collyStart(url string) {
 		go fingerDetect(string(r.Body), &result)
 		result.Site = r.Request.URL.String()
 		result.StatusCode = r.StatusCode
-		result.Header = "test"
+		headers, err := json.Marshal(r.Headers)
+		if err != nil {
+			fmt.Println(err)
+			result.Header = ""
+		}
+		result.Header = string(headers)
 	})
-
-	// 抓取html标签上的连接
-	if options.JsDetect {
-		c.OnHTML("script", func(e *colly.HTMLElement) {
-			attr := e.Attr("src")
-			if strings.HasSuffix(attr, "js") {
-				fmt.Println(attr)
-			}
-			c.Visit("http://" + "/" + attr)
-
-		})
-		c.OnHTML("a", func(e *colly.HTMLElement) {
-			var hrefUrl string
-			attr := e.Attr("href")
-
-			if strings.Contains(hrefUrl, "https://") || strings.Contains(hrefUrl, "http://") {
-				hrefUrl = strings.Split(attr, `/`)[2]
-			} else {
-				hrefUrl = "https://" + attr
-			}
-			c.Visit(hrefUrl)
-		})
-	}
 
 	// 抓取网站icon，从head中查看link标签，判断href是路径还是url地址
 	c.OnHTML("head", func(e *colly.HTMLElement) {
 		e.ForEach("link", func(_ int, el *colly.HTMLElement) {
 			attr := el.Attr("rel")
 			if strings.Compare(attr, "icon") == 0 {
-				iconUrl := e.Attr("href")
+				iconUrl := el.Attr("href")
 				log.Println("[icon抓取] icon address: ", iconUrl)
 				//fmt.Println("icon address: ", iconUrl)
 				if strings.Contains(iconUrl, "https://") || strings.Contains(iconUrl, "http://") {
@@ -240,6 +224,16 @@ func (options *Options) collyStart(url string) {
 
 	c.Visit(requestUrl)
 
+}
+
+func sendIpByHttpTask(httpData HttpData) {
+	url := strings.Split(httpData.Site, `/`)[2]
+	ip, err := net.LookupIP(url)
+
+	if err != nil {
+		fmt.Println("解析失败")
+	}
+	fmt.Println("ip: ", ip)
 }
 
 // 网站爆破，指纹扫描需要初始化参数的锁
@@ -282,6 +276,7 @@ func (options *Options) HttpTask() {
 		for {
 			select {
 			case httpData := <-httpDataChan:
+				go sendIpByHttpTask(httpData)
 				resultList = append(resultList, httpData)
 			case <-detectDone:
 				fmt.Println("all done")
