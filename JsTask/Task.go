@@ -16,7 +16,7 @@ import (
 type JsData struct {
 	Id           int
 	Site         string
-	relativeSite string
+	RelativeSite string
 	Info         map[string]string
 	Time         string
 	TaskName     string
@@ -104,7 +104,7 @@ func (config *Config) jsCollyStart(url string) {
 			return
 		}
 		result.Site = requestUrl
-		result.relativeSite = requestUrl
+		result.RelativeSite = requestUrl
 		go config.getResponseBodyInfo(string(r.Body), &result)
 	})
 

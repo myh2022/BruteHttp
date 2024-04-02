@@ -1,6 +1,8 @@
 package HttpTask
 
 import (
+	"BruteHttp/global"
+	"BruteHttp/models"
 	"BruteHttp/whatweb"
 	"bufio"
 	"context"
@@ -11,7 +13,6 @@ import (
 	"github.com/gocolly/colly"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -19,17 +20,17 @@ import (
 	"time"
 )
 
-type HttpData struct {
-	Id             int
-	Site           string
-	StatusCode     int
-	Header         string
-	Fingers        string
-	IconPath       string
-	ScreenshotPath string
-	Time           string
-	TaskName       string
-}
+//type HttpData struct {
+//	Id             int
+//	Site           string
+//	StatusCode     int
+//	Header         string
+//	Fingers        string
+//	IconPath       string
+//	ScreenshotPath string
+//	Time           string
+//	TaskName       string
+//}
 
 type Options struct {
 	FingerDetect      bool
@@ -40,9 +41,9 @@ type Options struct {
 	TaskName          string
 }
 
-var resultList []HttpData
+var resultList []models.HttpData
 
-var httpDataChan = make(chan HttpData)
+var httpDataChan = make(chan models.HttpData)
 var FingerDetectDoneChan = make(chan bool)
 
 func formatPath(url string) string {
@@ -70,7 +71,7 @@ func (options *Options) createBruteList(targetList []string) []string {
 	return urlList
 }
 
-func captureScreenshot(httpData *HttpData) {
+func captureScreenshot(httpData *models.HttpData) {
 
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
@@ -79,12 +80,12 @@ func captureScreenshot(httpData *HttpData) {
 
 	var buf []byte
 	_ = chromedp.Run(ctx, fullScreenshot(httpData.Site, 90, &buf))
-	if err := os.WriteFile("../screenshots/"+strings.ToLower(strings.Replace(strings.Split(httpData.Site, `/`)[2], ".", "_", -1))+".png", buf, 0644); err != nil {
+	if err := os.WriteFile("screenshots/"+strings.ToLower(strings.Replace(strings.Split(httpData.Site, `/`)[2], ".", "_", -1))+".png", buf, 0644); err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("[屏幕截图] wrote %v fullscreenshot", httpData.Site)
 	// 修改结构体字段值
-	httpData.ScreenshotPath = "../screenshots/" + strings.ToLower(strings.Replace(strings.Split(httpData.Site, `/`)[2], ".", "_", -1)) + ".png"
+	httpData.ScreenshotPath = "screenshots/" + strings.ToLower(strings.Replace(strings.Split(httpData.Site, `/`)[2], ".", "_", -1)) + ".png"
 
 }
 
@@ -95,7 +96,7 @@ func fullScreenshot(urlStr string, quality int, res *[]byte) chromedp.Tasks {
 	}
 }
 
-func getWebIcon(iconUrl string, httpData *HttpData) {
+func getWebIcon(iconUrl string, httpData *models.HttpData) {
 
 	t := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -132,7 +133,7 @@ func getWebIcon(iconUrl string, httpData *HttpData) {
 
 var wapp, _ = whatweb.Init("whatweb/app.json", true)
 
-func fingerDetect(body string, httpData *HttpData) {
+func fingerDetect(body string, httpData *models.HttpData) {
 	httpData.Fingers = "test"
 	data := whatweb.Data{}
 	data.Url = httpData.Site
@@ -151,7 +152,7 @@ func fingerDetect(body string, httpData *HttpData) {
 
 func (options *Options) collyStart(url string) {
 
-	var result HttpData
+	var result models.HttpData
 
 	requestUrl := "http://" + url
 
@@ -160,6 +161,8 @@ func (options *Options) collyStart(url string) {
 		colly.Async(options.Async),
 		colly.IgnoreRobotsTxt(),
 	)
+
+	c.SetRequestTimeout(3 * time.Second)
 
 	c.WithTransport(&http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -226,14 +229,8 @@ func (options *Options) collyStart(url string) {
 
 }
 
-func sendIpByHttpTask(httpData HttpData) {
-	url := strings.Split(httpData.Site, `/`)[2]
-	ip, err := net.LookupIP(url)
+func loadShareIpData(httpData models.HttpData) {
 
-	if err != nil {
-		fmt.Println("解析失败")
-	}
-	fmt.Println("ip: ", ip)
 }
 
 // 网站爆破，指纹扫描需要初始化参数的锁
@@ -245,12 +242,12 @@ var startCaptureChan = make(chan bool)
 // 网站截图需要初始化参数的锁
 var capWg sync.WaitGroup
 
-func (options *Options) HttpTask() {
+func (options *Options) HttpTask(shareDataChan chan global.ShareData) {
 	startTime := time.Now()
 	// 加锁防止options未赋值就开始goroutine
 	wg.Add(1)
 	var urlList = options.createBruteList(options.TargetList)
-	ch := make(chan struct{}, 16)
+	ch := make(chan struct{}, 32)
 	var waitGroup sync.WaitGroup
 	var detectDone = make(chan bool)
 	wg.Done()
@@ -276,34 +273,41 @@ func (options *Options) HttpTask() {
 		for {
 			select {
 			case httpData := <-httpDataChan:
-				go sendIpByHttpTask(httpData)
+				//go sendIpByHttpTask(httpData, ipChan)
 				resultList = append(resultList, httpData)
 			case <-detectDone:
+				var dataList []string
 				fmt.Println("all done")
+				for _, data := range resultList {
+					dataList = append(dataList, data.Site)
+				}
+				shareDataChan <- global.ShareData{Name: "httpTask", Data: dataList, State: true}
 				startCaptureChan <- true
 				return
 			}
 		}
 	}()
-
 	// 开启截图goroutine
 	<-startCaptureChan
-	// 开始对网站截图进行初始化
-	capWg.Add(1)
-	var capCh = make(chan struct{}, 4)
-	var capRoutineWg = sync.WaitGroup{}
-	capWg.Done()
-	capWg.Wait()
-	fmt.Println("开始网站截图")
-	for i, _ := range resultList {
-		capRoutineWg.Add(1)
-		capCh <- struct{}{}
-		go func() {
-			defer capRoutineWg.Done()
-			captureScreenshot(&resultList[i])
-			<-capCh
-		}()
-		capRoutineWg.Wait()
+	// 判断是否开启网站截图功能
+	if options.CaptureScreenshot {
+		// 开始对网站截图进行初始化
+		capWg.Add(1)
+		var capCh = make(chan struct{}, 4)
+		var capRoutineWg = sync.WaitGroup{}
+		capWg.Done()
+		capWg.Wait()
+		fmt.Println("开始网站截图")
+		for i, _ := range resultList {
+			capRoutineWg.Add(1)
+			capCh <- struct{}{}
+			go func() {
+				defer capRoutineWg.Done()
+				captureScreenshot(&resultList[i])
+				<-capCh
+			}()
+			capRoutineWg.Wait()
+		}
 	}
 
 	fmt.Println(time.Since(startTime))
@@ -311,5 +315,6 @@ func (options *Options) HttpTask() {
 	fmt.Println(resultList)
 
 	// 对数据库操作
-
+	err := models.HttpData{}.InsertOrUpdateHttpData(resultList)
+	fmt.Println(err)
 }
